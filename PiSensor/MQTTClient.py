@@ -82,7 +82,7 @@ class GPIOTimer:
 		if self._delay > 0.15:
 			self._delay = self._delay - 0.1
 		if self._count > 1:
-			self._maxcount = self._maxcount - 1
+			self._maxcount = se
 
 	def change_sensitivity(self, val):
 		if val > 0:
@@ -123,6 +123,9 @@ def on_message(client, userdata, msg):
 	if not split[0] == "pi":
 		return
 	
+	global GPIOthreshold
+	global GPIObouncetime
+
 	# inspecting contents of message
 	cmd = split[1]
 	attribute = int(split[2]) 
@@ -161,9 +164,20 @@ def disable_interrupts():
 	GPIOtimer.stopTimer()
 	# ...
 
-def enable_interrupts(bounce):
+def enable_interrupts():
 	print ("Enabling interrupts.")
-	GPIO.add_event_detect(__GPIO_PIN__, GPIO.FALLING, callback=on_noise_break, bouncetime=bounce)
+	retry = 5
+	while retry > 0:
+		try:
+			GPIO.add_event_detect(__GPIO_PIN__, GPIO.FALLING, callback=on_noise_break, bouncetime=GPIObouncetime)
+			break
+		except:
+			if retry == 0:
+				print ("Giving up... :[ ")
+				raise
+			print ("Failed to attach event to GPIO, trying again... {}".format(retry))
+			time.sleep(1)
+			retry = retry - 1
 	GPIOtimer.startTimer()
 	# ...
 
@@ -171,6 +185,7 @@ def update_interrupt_settings():
 	disable_interrupts()
 	# Let GPIO catch up
 	time.sleep(3)
+	GPIO.cleanup()
 	enable_interrupts()
 
 # Start 
@@ -190,7 +205,7 @@ try:
 	GPIO.setmode(GPIO.BOARD)
 	GPIO.setup(__GPIO_PIN__, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) 
 	GPIOtimer = GPIOTimer()
-	enable_interrupts(GPIObouncetime)	
+	enable_interrupts()		
 
 	print ("Ready to receive/transmit. CRTL+C to terminate.")
 
