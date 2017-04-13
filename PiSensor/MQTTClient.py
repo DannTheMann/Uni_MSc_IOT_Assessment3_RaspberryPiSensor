@@ -10,6 +10,7 @@ __SERVER__ = "broker.hivemq.com"
 __PORT__ = 1883
 __MQTT_TOPIC_CONTROL__ = "/testing/dja33/public/control"
 __MQTT_TOPIC_MESSAGE__ = "/testing/dja33/public/message"
+__GPIO_PIN__ = 16
 
 # Global vars
 client = mqtt.Client()
@@ -37,12 +38,11 @@ def on_message(client, userdata, msg):
 	print ("Result: {}".format(result))
 
 def on_noise_break(channel):  
-	print "Rising edge"
+	publishMessage("Noise Alarm!")
 
 def publishMessage(msg):
 	(result, mid) = client.publish(__MQTT_TOPIC_MESSAGE__, msg, 1, True)
-	print ("Mid: {} | Result: {} | Contents: {}".format(mid, result, msg)
-
+	print ("Mid: {} | Result: {} | Contents: {}".format(mid, result, msg))
 
 try:
 
@@ -55,7 +55,7 @@ try:
 	client.connect(__SERVER__, __PORT__, 60)
 	print (" % ...")
 	#client.loop_forever()
-	#while connected <= 10:
+#	while connected <= 10:
 #		if connected == 10:
 #			print ("Failed to connect to MQTT '{}', quitting.".format(__SERVER__))
 #			quit()
@@ -65,8 +65,8 @@ try:
 
 	GPIO.setmode(GPIO.BOARD)
 
-	# GPIO 24 set up as an input, pulled down, connected to 3V3 on button press  
-	GPIO.setup(16, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) 
+	# GPIO 16 set up as an input, pulled down, connected to 3V3 on button press  
+	GPIO.setup(__GPIO_PIN__, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) 
 
 	# when a falling edge is detected on port 17, regardless of whatever   
 	# else is happening in the program, the function my_callback will be run  
@@ -82,5 +82,7 @@ try:
 
 # CRTL + C
 except KeyboardInterrupt:
+	GPIO.remove_event_detect(__GPIO_PIN__)
+	GPIO.cleanup()       # clean up GPIO on CTRL+C exit
 	print(" Keyboard interrupt, exiting...")
 	quit()
