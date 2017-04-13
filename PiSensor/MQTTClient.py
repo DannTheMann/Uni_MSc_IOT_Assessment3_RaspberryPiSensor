@@ -41,41 +41,62 @@ class GPIOTimer:
 		self._stage = 0
 		self._thread = None
 		self._count = 5	
+		self._maxcount = 5
+		self._stop = False
 
-	def _count():
-		if self._stage > 0:
-			time.sleep(GPIObouncetime + self._delay)
+	def _validate(self):
+		while self._stop == False:
+			#print( " Sleep: {} | C: {} ".format(((GPIObouncetime / 1000) + self._delay), self._count))
+			time.sleep((GPIObouncetime / 1000) + self._delay)
 			if self._count > 0:
 				self._count = self._count - 1
 			if self._count == 0:
-				self._count = 5
-				self._stage = self._stage - 1
+				self._count = self._maxcount
+				self._stage = 0
 
-	def start(self):
-		self.stop()
-		self._thread = threading.Thread(target=self._count) 
+	def startTimer(self):
+		self.stopTimer()
+		self._stop = False
+		self._thread = threading.Thread(target=self._validate, args=())
+		self._thread.daemon = True 
+		self._thread.start()
 
-	def stop(self):
+	def stopTimer(self):
 		if not self._thread == None and self._thread.is_alive():
-			self._thread.stop()
-		self._count = 5
+			self._stop = True
+		time.sleep((GPIObouncetime / 1000) + self._delay)
+		self._count = self._maxcount
 		self._stage = 0
 
-	def increase_sensitivity(self):
-		self._delay = self._delay + 0.1
-		self._count = self._count + 1
+	def get_frequency(self):
+		return GPIOthreshold
 
-	def decrease_sensitivity(self):
-		self._delay = self._delay - 1
-		self._count = self._count - 1
+	def get_sensitivity(self):
+		return (GPIObouncetime / 1000) + self._delay	
+
+	def _increase_sensitivity(self):
+		self._delay = self._delay + 0.1
+		self._maxcount = self._maxcount + 1
+
+	def _decrease_sensitivity(self):
+		if self._delay > 0.15:
+			self._delay = self._delay - 0.1
+		if self._count > 1:
+			self._maxcount = self._maxcount - 1
+
+	def change_sensitivity(self, val):
+		if val > 0:
+			self._increase_sensitivity()
+		else:
+			self._decrease_sensitivity()
 
 	def increment(self):
 		print ("Increment Received: {}".format(self._stage))
 		self._stage = self._stage + 1
-		if self._stage >= GPIOthreshold:
+		if self._stage > GPIOthreshold:
 			publish_message(__CONTROL_ALARM_MSG__)
 			self._stage = 0
-		self._count = 5
+		self._count = self._maxcount
 
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, rc):
@@ -92,9 +113,41 @@ def on_message(client, userdata, msg):
 	# Mid = message ID
 	# Result = Successful or not
 	(result, mid) = client.publish(__MQTT_TOPIC_MESSAGE__, "Ackn", 1, True)
-	print ("Mid: {}".format(mid))
-	print ("Result: {}".format(result))
-
+	
+	split = msg.payload.split(":")
+	
+	# invalid payload
+	if len(split) == 0:
+		return
+	# not our message
+	if not split[0] == "pi":
+		return
+	
+	# inspecting contents of message
+	cmd = split[1]
+	attribute = int(split[2]) 
+	
+	if cmd == "s": # Sensitivity modifier
+		GPIOtimer.change_sensitivity(attribute)
+		print ("Sensitivity change: {} | {}".format(attribute, GPIOtimer.get_sensitivity()))
+	elif cmd == "f": # Frequency modifier
+		if attribute > 0:
+			GPIOthreshold = GPIOthreshold + 1
+		elif GPIOthreshold > 1:
+			GPIOthreshold = GPIOthreshold - 1
+		print ("Frequency change: {} | {}".format(attribute, GPIOthreshold))
+	elif cmd == "b": # Bounce time modifier
+		if GPIObouncetime < 100 and attribute < 0:
+			return # No point updating the interrupt, will be at 100
+		if attribute == 0:
+			attribute = -1
+		GPIObouncetime = attribute * 10
+		if GPIObouncetime < 100:
+			GPIObouncetime = 100
+		update_interrupt_settings()		
+	else:
+		print ("Unknown cmd '{}'.".format(cmd))
+	
 def on_noise_break(channel):  
 	GPIOtimer.increment()
 
@@ -105,20 +158,20 @@ def publish_message(msg):
 def disable_interrupts():
 	print ("Disabling interrupts.")
 	GPIO.remove_event_detect(__GPIO_PIN__) 
-	GPIOtimer.stop()
+	GPIOtimer.stopTimer()
 	# ...
 
 def enable_interrupts(bounce):
 	print ("Enabling interrupts.")
 	GPIO.add_event_detect(__GPIO_PIN__, GPIO.FALLING, callback=on_noise_break, bouncetime=bounce)
-	GPIOtimer.start()
+	GPIOtimer.startTimer()
 	# ...
 
-def update_interrupt_settings(bounce):
+def update_interrupt_settings():
 	disable_interrupts()
 	# Let GPIO catch up
 	time.sleep(3)
-	enable_interrupts(bounce)
+	enable_interrupts()
 
 # Start 
 try:
