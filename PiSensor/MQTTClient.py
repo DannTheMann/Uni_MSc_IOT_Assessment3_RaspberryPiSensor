@@ -34,7 +34,8 @@ class GPIOTimer:
 
 	# defines that these are the ONLY self referencing fields
 	# for this class/object
-	__slots__ = ("_stage", "_delay", "_thread", "_count")
+	__slots__ = ("_stage", "_delay", "_thread",
+			 "_count", "_maxcount", "_stop")
 
 	def __init__(self):
 		self._delay = GPIOdelaycounter
@@ -44,6 +45,8 @@ class GPIOTimer:
 		self._maxcount = 5
 		self._stop = False
 
+	# Checking function to be used as a means of measuring the
+	# validity of the GPIO input
 	def _validate(self):
 		while self._stop == False:
 			#print( " Sleep: {} | C: {} ".format(((GPIObouncetime / 1000) + self._delay), self._count))
@@ -54,6 +57,7 @@ class GPIOTimer:
 				self._count = self._maxcount
 				self._stage = 0
 
+	# Start the thread, which in turns utilises the _validate function
 	def startTimer(self):
 		self.stopTimer()
 		self._stop = False
@@ -61,16 +65,21 @@ class GPIOTimer:
 		self._thread.daemon = True 
 		self._thread.start()
 
+	# Stop the thread gracefully, utilises a condition rather than 
+	# forcefully stopping the thread
 	def stopTimer(self):
+		# If the thread actually is alive
 		if not self._thread == None and self._thread.is_alive():
 			self._stop = True
-		time.sleep((GPIObouncetime / 1000) + self._delay)
+			# Sleeping the same amount of time expected 
+			time.sleep((GPIObouncetime / 1000) + self._delay)
 		self._count = self._maxcount
 		self._stage = 0
 
 	def get_frequency(self):
 		return GPIOthreshold
 
+	# Get the current sensitivity of the GPIO reporter
 	def get_sensitivity(self):
 		return (GPIObouncetime / 1000) + self._delay	
 
@@ -78,6 +87,9 @@ class GPIOTimer:
 		self._delay = self._delay + 0.1
 		self._maxcount = self._maxcount + 1
 
+	# Decrease the sensitiivty, lowers values of delay between check 
+	# in validation as well as the maximum amount of counts expected
+	# Cannot fall below 0.15 or 1
 	def _decrease_sensitivity(self):
 		if self._delay > 0.15:
 			self._delay = self._delay - 0.1
@@ -90,9 +102,11 @@ class GPIOTimer:
 		else:
 			self._decrease_sensitivity()
 
+	# Called when the sensor picks up noise and wants to validate it
 	def increment(self):
 		print ("Increment Received: {}".format(self._stage))
 		self._stage = self._stage + 1
+		# If the noise received extends beyond the threshold
 		if self._stage > GPIOthreshold:
 			publish_message(__CONTROL_ALARM_MSG__)
 			self._stage = 0
@@ -104,16 +118,18 @@ def on_connect(client, userdata, flags, rc):
     	# Subscribing in on_connect() means that if we lose the connection and
     	# reconnect then subscriptions will be renewed.
 	client.subscribe(__MQTT_TOPIC_CONTROL__)
+	# Tell control server we're online
 	publish_message(__CONTROL_START_MSG__)
 
 # The callback for when a PUBLISH message is received from the server.
 def on_message(client, userdata, msg):
-	print(msg.topic+" -> "+str(msg.payload))
+	print ("{} -> {}".format(msg.topic, msg.payload))
 	# Acknowledge request
 	# Mid = message ID
 	# Result = Successful or not
 	(result, mid) = client.publish(__MQTT_TOPIC_MESSAGE__, "Ackn", 1, True)
 	
+	# Split the incoming packet
 	split = msg.payload.split(":")
 	
 	# invalid payload
@@ -123,6 +139,7 @@ def on_message(client, userdata, msg):
 	if not split[0] == "pi":
 		return
 	
+	# Reference our global variables
 	global GPIOthreshold
 	global GPIObouncetime
 
@@ -150,20 +167,26 @@ def on_message(client, userdata, msg):
 		update_interrupt_settings()		
 	else:
 		print ("Unknown cmd '{}'.".format(cmd))
-	
+
+# Callback function for GPIO interrupt
 def on_noise_break(channel):  
 	GPIOtimer.increment()
 
+# Shorthand function for publishing messages
 def publish_message(msg):
 	(result, mid) = client.publish(__MQTT_TOPIC_MESSAGE__, msg, 1, True)
 	print ("Mid: {} | Result: {} | Contents: {}".format(mid, result, msg))
 
+# Disable GPIO interrupts, stops GPIOTimer thread
 def disable_interrupts():
 	print ("Disabling interrupts.")
 	GPIO.remove_event_detect(__GPIO_PIN__) 
 	GPIOtimer.stopTimer()
 	# ...
 
+# Attempt to reestablish interrupts, will try 5 times
+# before giving up and raise an exception
+# If successful then starts the GPIOtimer thread
 def enable_interrupts():
 	print ("Enabling interrupts.")
 	retry = 5
@@ -181,6 +204,7 @@ def enable_interrupts():
 	GPIOtimer.startTimer()
 	# ...
 
+# Disable and re-enable interrupts with new parameters
 def update_interrupt_settings():
 	disable_interrupts()
 	# Let GPIO catch up
@@ -216,12 +240,14 @@ try:
 # CRTL + C
 except KeyboardInterrupt:
 	print(" Keyboard interrupt, exiting...") 
+# Something else went wrong
 except BaseException as e:
 	print(" An error occurred. Exiting...") 
 	print (e)
 	traceback.print_exc()
 
-publish_message(__CONTROL_END_MSG__)
-disable_interrupts()
+# Program closed
+publish_message(__CONTROL_END_MSG__) # Tell the control unit we're finished
+disable_interrupts() # Close up any interrupts left open
 GPIO.cleanup()       # clean up GPIO on CTRL+C exit
 quit()
