@@ -12,9 +12,9 @@ __PORT__ = 1883
 __MQTT_TOPIC_CONTROL__ = "/testing/dja33/public/control"
 __MQTT_TOPIC_MESSAGE__ = "/testing/dja33/public/message"
 # MQTT Control messages
-__CONTROL_START_MSG__ = "START"
-__CONTROL_END_MSG__   = "END"
-__CONTROL_ALARM_MSG__ = "ALARM"
+__CONTROL_START_MSG__ = "pi:u:s"
+__CONTROL_END_MSG__   = "pi:u:e"
+__CONTROL_ALARM_MSG__ = "pi:u:a"
 
 # GPIO settings
 __GPIO_PIN__ = 16
@@ -93,8 +93,8 @@ class GPIOTimer:
 	def _decrease_sensitivity(self):
 		if self._delay > 0.15:
 			self._delay = self._delay - 0.1
-		if self._count > 1:
-			self._maxcount = se
+		if self._maxcount > 1:
+			self._maxcount = self._maxcount - 1
 
 	def change_sensitivity(self, val):
 		if val > 0:
@@ -127,13 +127,13 @@ def on_message(client, userdata, msg):
 	# Acknowledge request
 	# Mid = message ID
 	# Result = Successful or not
-	(result, mid) = client.publish(__MQTT_TOPIC_MESSAGE__, "Ackn", 1, True)
+	#(result, mid) = client.publish(__MQTT_TOPIC_MESSAGE__, "Ackn", 1, True)
 	
 	# Split the incoming packet
 	split = msg.payload.split(":")
 	
 	# invalid payload
-	if len(split) == 0:
+	if len(split) <= 1:
 		return
 	# not our message
 	if not split[0] == "pi":
@@ -145,23 +145,47 @@ def on_message(client, userdata, msg):
 
 	# inspecting contents of message
 	cmd = split[1]
-	attribute = int(split[2]) 
-	
+
+	# Disable interrupt, timer etc
+	if cmd == "d":
+		if GPIOenabled == False: 
+			print ("Sensor already disabled.") 
+		else:
+			disable_interrupts()
+		return
+	# Enable interrupt, timer etc
+	elif cmd == "e":
+		if GPIOenabled == True:
+			print ("Sensor already enabled.")
+		else:
+			enable_interrupts()
+		return
+
+	# Try to parse the attribute value as an integer
+	attribute = 0
+	try:
+		attribute = int(split[2]) 
+	except:
+		print ("Unexpected format for attribute, expecting int received: {}".format(split[2]))
+		return	
+
 	if cmd == "s": # Sensitivity modifier
 		GPIOtimer.change_sensitivity(attribute)
 		print ("Sensitivity change: {} | {}".format(attribute, GPIOtimer.get_sensitivity()))
+		publish_message("pi:s:{}".format(GPIO.get_sensitivity()))
 	elif cmd == "f": # Frequency modifier
-		if attribute > 0:
+		if attribute > 0 and GPIOthreshold < 10:
 			GPIOthreshold = GPIOthreshold + 1
 		elif GPIOthreshold > 1:
 			GPIOthreshold = GPIOthreshold - 1
 		print ("Frequency change: {} | {}".format(attribute, GPIOthreshold))
+		publish_message("pi:t:{}".format(GPIOthreshold))
 	elif cmd == "b": # Bounce time modifier
-		if GPIObouncetime < 100 and attribute < 0:
+		if GPIObouncetime <= 100 and attribute <= 0:
 			return # No point updating the interrupt, will be at 100
 		if attribute == 0:
 			attribute = -1
-		GPIObouncetime = attribute * 10
+		GPIObouncetime = GPIObouncetime + (attribute * 10)
 		if GPIObouncetime < 100:
 			GPIObouncetime = 100
 		update_interrupt_settings()		
@@ -179,19 +203,24 @@ def publish_message(msg):
 
 # Disable GPIO interrupts, stops GPIOTimer thread
 def disable_interrupts():
+	global GPIOenabled
 	print ("Disabling interrupts.")
 	GPIO.remove_event_detect(__GPIO_PIN__) 
 	GPIOtimer.stopTimer()
+	GPIOenabled = False
 	# ...
 
 # Attempt to reestablish interrupts, will try 5 times
 # before giving up and raise an exception
 # If successful then starts the GPIOtimer thread
 def enable_interrupts():
+	global GPIOenabled
 	print ("Enabling interrupts.")
 	retry = 5
-	while retry > 0:
+	while retry >= 0:
 		try:
+			GPIO.setmode(GPIO.BOARD)
+			GPIO.setup(__GPIO_PIN__, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
 			GPIO.add_event_detect(__GPIO_PIN__, GPIO.FALLING, callback=on_noise_break, bouncetime=GPIObouncetime)
 			break
 		except:
@@ -202,16 +231,18 @@ def enable_interrupts():
 			time.sleep(1)
 			retry = retry - 1
 	GPIOtimer.startTimer()
+	GPIOenabled = True
 	# ...
 
 # Disable and re-enable interrupts with new parameters
 def update_interrupt_settings():
 	disable_interrupts()
 	# Let GPIO catch up
-	time.sleep(3)
+	# time.sleep(3)
 	GPIO.cleanup()
 	enable_interrupts()
-
+	print ("Updated interrupt settings, bouncetime: {}".format(GPIObouncetime))
+	publish_message("pi:b:{}".format(GPIObouncetime))
 # Start 
 try:
 
@@ -226,8 +257,6 @@ try:
 	client.connect(__SERVER__, __PORT__, 60)
 	print (" % ...")
 	print ("Setting up GPIO pins...")
-	GPIO.setmode(GPIO.BOARD)
-	GPIO.setup(__GPIO_PIN__, GPIO.IN, pull_up_down=GPIO.PUD_DOWN) 
 	GPIOtimer = GPIOTimer()
 	enable_interrupts()		
 
