@@ -7,7 +7,7 @@ import RPi.GPIO as GPIO
 
 # Equiv of constants
 # MQTT Settings
-__SERVER__ = "broker.hivemq.com"
+__SERVER__ = "iot.eclipse.org"
 __PORT__ = 1883
 __MQTT_TOPIC_CONTROL__ = "/testing/dja33/public/control"
 __MQTT_TOPIC_MESSAGE__ = "/testing/dja33/public/message"
@@ -19,6 +19,9 @@ __CONTROL_ALARM_MSG__ = "pi:u:a"
 # GPIO settings
 __GPIO_PIN__ = 16
 
+# Seconds to wait between sending heartbeats
+__HEARTBEAT_SLEEP_SECONDS__ = 15
+
 # Global vars
 client = mqtt.Client()
 connected = 0 # Connection state, 0 = nothing, 1 = connected
@@ -29,6 +32,9 @@ GPIObouncetime = 300 # How long to wait before accepting new interrupts (Millise
 GPIOthreshold = 3 # How many consecutive signals we must receive to trigger our state
 GPIOdelaycounter = 0.5 # Seconds between each decrement of a 'count'
 GPIOtimer = None # Object wrapper for Thread manipulation of counting
+
+hbThread = None # Thread used for sending heartbeats periodically 
+alive = True # Whether the heartbeat thread is alive
 
 class GPIOTimer:
 
@@ -172,7 +178,7 @@ def on_message(client, userdata, msg):
 	if cmd == "s": # Sensitivity modifier
 		GPIOtimer.change_sensitivity(attribute)
 		print ("Sensitivity change: {} | {}".format(attribute, GPIOtimer.get_sensitivity()))
-		publish_message("pi:s:{}".format(GPIO.get_sensitivity()))
+		publish_message("pi:s:{}".format(GPIOtimer.get_sensitivity()))
 	elif cmd == "f": # Frequency modifier
 		if attribute > 0 and GPIOthreshold < 10:
 			GPIOthreshold = GPIOthreshold + 1
@@ -243,6 +249,12 @@ def update_interrupt_settings():
 	enable_interrupts()
 	print ("Updated interrupt settings, bouncetime: {}".format(GPIObouncetime))
 	publish_message("pi:b:{}".format(GPIObouncetime))
+
+def heartbeat():
+	while alive:
+		time.sleep(__HEARTBEAT_SLEEP_SECONDS__) # Sleep for 15 seconds
+		publish_message("pi:*")
+
 # Start 
 try:
 
@@ -259,6 +271,10 @@ try:
 	print ("Setting up GPIO pins...")
 	GPIOtimer = GPIOTimer()
 	enable_interrupts()		
+	
+	# Heartbeat start
+	hbThread = threading.Thread(target=heartbeat)
+	hbThread.start()
 
 	print ("Ready to receive/transmit. CRTL+C to terminate.")
 
@@ -276,6 +292,7 @@ except BaseException as e:
 	traceback.print_exc()
 
 # Program closed
+alive = False
 publish_message(__CONTROL_END_MSG__) # Tell the control unit we're finished
 disable_interrupts() # Close up any interrupts left open
 GPIO.cleanup()       # clean up GPIO on CTRL+C exit
